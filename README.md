@@ -16,6 +16,16 @@ node server.js
 要求本机已安装 Docker 与 Compose 插件，且当前用户能访问 Docker 守护进程
 （通常需要加入 `docker` 组，或使用 root）。
 
+## 测试
+
+```bash
+npm test                                    # 跑 tests/ 下的全部用例
+node --test --experimental-test-coverage    # 附带覆盖率
+```
+
+用 Node 内置的 `node:test`，不需要安装任何依赖；用例只碰临时目录，
+不调用 Docker，所以无需守护进程即可运行。
+
 ## 容器化运行
 
 **推荐用仓库里的 `docker-compose.yml`**，它已经处理了同路径挂载、令牌校验和项目名冲突：
@@ -268,15 +278,23 @@ CYPHER_TOKEN='换成一个长随机串' HOST=0.0.0.0 node server.js
 | 目标已存在且不是目录 | 拒绝（409） |
 
 允许把部署路径放在数据目录的子目录下（例如 `<CYPHER_DATA_DIR>/apps/xxx`），
-这正是默认行为。
+这正是默认行为。这样创建的应用仍记为 `owned: false`，删除时目录会保留。
 
 ### 删除时的行为
 
-- **默认目录**（位于 `<CYPHER_DATA_DIR>/apps/` 下）：连同文件一起删除
-- **自定义路径**：只从 `data/apps.json` 中移除，**目录内容原样保留**
+应用创建时就确定「目录归谁所有」，并记在 `data/apps.json` 的 `owned` 字段里，
+删除时直接看这个标记，不再按路径反推：
+
+- **由 Cypher 创建的目录**（`owned: true`，即留空部署路径时的默认目录）：
+  连同文件一起删除
+- **用户指定的路径**（`owned: false`）：只从 `data/apps.json` 中移除，
+  **目录内容原样保留**。即使这个路径恰好位于 `data/apps/` 之下也一样保留。
 
 这个区别写在删除确认框里，接口返回的 `removedFiles` 字段也会标明实际行为。
-如果不确定路径是哪种，删除后到该目录确认一下即可。
+修改部署路径时 `owned` 会重新判定：迁回默认目录才重新变为 `true`。
+
+升级前写入的旧注册表没有 `owned` 字段，首次启动时按旧规则推断——
+只有恰好等于 `<CYPHER_DATA_DIR>/apps/<应用id>` 的路径才算 `owned`。
 
 ### 目录被外部改动
 
@@ -293,6 +311,7 @@ lib/store.js           应用注册表、部署路径校验与迁移、compose/e
 public/index.html      页面骨架
 public/app.js          前端逻辑（原生 ES 模块）
 public/styles.css      样式
+tests/                 node:test 用例（注册表与部署目录，不依赖 Docker）
 data/apps.json         应用注册表：id、名称、描述、部署路径
 data/uploads/          镜像上传临时目录（上传完成后即删）
 data/apps/<id>/        未指定部署路径时的默认承载目录
@@ -330,9 +349,9 @@ Cypher 的元数据全部集中在 `data/apps.json`。升级前若已有旧版�
 不需要任何仓库密钥，`permissions` 只要 `contents: read`。
 
 `check` job 做静态检查：对全部受版本控制的 `.js` 跑 `node --check`、
-`docker compose config` 校验示例文件、确认空 `CYPHER_TOKEN` 会被 `${VAR:?}`
-拒绝、断言 `public/` 里没有 `http(s)://` 外链（否则断网部署会白屏）、
-确认 `data/`、`casdoor/`、`smartq/` 与 `.env` 没有被提交。
+跑 `npm test` 执行单元测试、`docker compose config` 校验示例文件、确认空
+`CYPHER_TOKEN` 会被 `${VAR:?}` 拒绝、断言 `public/` 里没有 `http(s)://` 外链
+（否则断网部署会白屏）、确认 `data/`、`casdoor/`、`smartq/` 与 `.env` 没有被提交。
 
 `build` job 做端到端验证：先 `docker build --network=none --pull=false`
 证明构建过程不联网，再在镜像内检查 `node` / `docker` / `compose` 三件工具，

@@ -748,9 +748,12 @@ function bindAppEvents() {
 
   $('#btn-delete')?.addEventListener('click', async () => {
     const app = state.detail.app;
+    const pathNote = app.owned
+      ? `默认目录 ${app.deployPath} 下的文件会一并删除。`
+      : `自定义部署路径 ${app.deployPath} 仅从列表移除，文件保留。`;
     const result = await openModal({
       title: `删除应用「${app.name}」`,
-      subtitle: `会停止并移除容器。默认目录下的文件一并删除；自定义部署路径 ${app.deployPath} 仅从列表移除，文件保留。`,
+      subtitle: `会停止并移除容器。${pathNote}`,
       fields: [{ name: 'confirm', label: `输入应用 ID「${app.id}」以确认`, required: true, maxlength: 64 }],
       confirmText: '删除',
       danger: true,
@@ -762,7 +765,7 @@ function bindAppEvents() {
     }
     try {
       const res = await api(`/api/apps/${app.id}`, { method: 'DELETE' });
-      toast(res.removedFiles ? '应用已删除，部署目录已清理' : '应用已删除，自定义目录文件已保留', 'ok');
+      toast(res.removedFiles ? '应用已删除，部署目录已清理' : '应用已删除，部署目录文件已保留', 'ok');
       state.currentId = null;
       state.detail = null;
       stopPolling();

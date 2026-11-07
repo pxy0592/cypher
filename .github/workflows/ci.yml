@@ -39,6 +39,9 @@ jobs:
             echo "ok  $file"
           done
 
+      - name: 单元测试
+        run: npm test
+
       - name: compose 文件可解析
         env:
           CYPHER_TOKEN: ${{ env.CI_TOKEN }}
