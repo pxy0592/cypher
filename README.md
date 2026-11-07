@@ -353,6 +353,13 @@ Cypher 的元数据全部集中在 `data/apps.json`。升级前若已有旧版�
 `CYPHER_TOKEN` 会被 `${VAR:?}` 拒绝、断言 `public/` 里没有 `http(s)://` 外链
 （否则断网部署会白屏）、确认 `data/`、`casdoor/`、`smartq/` 与 `.env` 没有被提交。
 
+单元测试步骤用 `npm test`（即 `node --test tests/*.test.js`）。已核实断言失败
+会让步骤以非零退出码失败，不会被吞掉。边界是：**匹配不到任何测试文件时
+`node --test` 也返回 0**，只打印 `# tests 0`。也就是说整目录被删、或测试文件
+全部改名成非 `*.test.js` 时，这一步会静默空跑而 CI 仍然全绿。这类改动在
+diff 里很明显，暂不额外加守卫；若日后要自证「至少跑了一个用例」，在测试内
+断言用例数比在 workflow 里堆 shell 更合适。
+
 `build` job 做端到端验证：先 `docker build --network=none --pull=false`
 证明构建过程不联网，再在镜像内检查 `node` / `docker` / `compose` 三件工具，
 启动容器并等健康检查变成 `healthy`，然后跑完整生命周期——建应用、写
