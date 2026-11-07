@@ -1,5 +1,7 @@
 # Cypher · Compose 部署台
 
+[![CI](https://github.com/pxy0592/cypher/actions/workflows/ci.yml/badge.svg)](https://github.com/pxy0592/cypher/actions/workflows/ci.yml)
+
 用浏览器管理 Docker Compose 应用：编写 `.env` 与 compose 文件、导入镜像归档、启动/停止/重启、查看容器状态与日志。
 
 纯 JavaScript 实现，无构建步骤、无第三方运行时依赖（仅 Node 内置模块）。
