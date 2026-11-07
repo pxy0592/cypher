@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cypher · Compose 部署台</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230f172a'/><path d='M9 12h14M9 20h14M13 8v16M19 8v16' stroke='%2338bdf8' stroke-width='2' stroke-linecap='round'/></svg>">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M9 4v16M15 4v16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <div>
+          <strong>Cypher</strong>
+          <small>Compose 部署台</small>
+        </div>
+      </div>
+
+      <button class="btn btn-primary btn-block" id="btn-new-app">新建应用</button>
+
+      <nav class="app-list" id="app-list" aria-label="应用列表">
+        <div class="empty-hint">加载中…</div>
+      </nav>
+
+      <footer class="sidebar-foot">
+        <button class="link-btn" id="btn-system">运行环境</button>
+        <span class="dot" id="daemon-dot" title="Docker 状态"></span>
+      </footer>
+    </aside>
+
+    <main class="main" id="main">
+      <div class="placeholder">
+        <h2>选择一个应用</h2>
+        <p>从左侧选择应用，或新建一个 Compose 应用开始部署。</p>
+      </div>
+    </main>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

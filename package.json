@@ -1,0 +1,14 @@
+{
+  "name": "cypher",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web console for deploying Docker Compose applications",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

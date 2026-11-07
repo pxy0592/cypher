@@ -1,0 +1,53 @@
+# Cypher 自身的 docker-compose 示例。
+#
+# 用法：
+#   cp .env.example .env      # 然后把 CYPHER_TOKEN 换成 openssl rand -hex 32 的输出
+#   docker compose up -d --build
+#   打开 http://<宿主机IP>:3000
+#
+# 也可以全部用环境变量：CYPHER_TOKEN=xxx CYPHER_HOME=/srv/cypher docker compose up -d
+#
+# 为什么项目名是 cypher--console：
+#   Cypher 用应用 id 作为 `docker compose --project-name`。若本文件的项目名与
+#   某个应用 id 相同，在那个应用上点「启动」会重建/替换 Cypher 自己的容器
+#   （实测：Cypher 容器被停掉，退出码 143）。
+#   Cypher 生成 id 时用 slugify，连续的非字母数字会折叠成单个 `-`，
+#   因此 `cypher--console`（双横线）不可能由应用名生成，撞名概率为零。
+#   Docker Compose 会原样保留双横线（已验证：项目 label 为 cypher--console）。
+name: cypher--console
+
+services:
+  cypher:
+    build:
+      context: .
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+        DOCKER_CLI_IMAGE: ${DOCKER_CLI_IMAGE:-docker:27-cli}
+    image: cypher:${CYPHER_VERSION:-1.0.0}
+    container_name: cypher
+    restart: unless-stopped
+    init: true
+
+    ports:
+      # 只在内网使用时可以改成 127.0.0.1 并配合反向代理
+      - "${CYPHER_BIND:-0.0.0.0}:${CYPHER_PORT:-3000}:3000"
+
+    environment:
+      # 变量为空时 compose 直接报错，避免无令牌就对内网开放
+      CYPHER_TOKEN: ${CYPHER_TOKEN:?请先设置 CYPHER_TOKEN，可用 openssl rand -hex 32 生成}
+      CYPHER_MAX_UPLOAD_MB: ${CYPHER_MAX_UPLOAD_MB:-4096}
+      # 与下面的宿主机挂载路径保持一致，见 README「compose 里的相对挂载」
+      CYPHER_DATA_DIR: ${CYPHER_HOME:-/srv/cypher}
+      TZ: ${TZ:-Asia/Shanghai}
+
+    volumes:
+      # 操作宿主机的 Docker 守护进程
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 数据目录同路径绑定：冒号两侧必须相同
+      - ${CYPHER_HOME:-/srv/cypher}:${CYPHER_HOME:-/srv/cypher}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
