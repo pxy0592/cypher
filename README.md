@@ -205,7 +205,8 @@ CYPHER_TOKEN='换成一个长随机串' HOST=0.0.0.0 node server.js
 - **新建应用** — 每个应用一个独立目录，自动生成 compose 模板与 `.env` 模板
 - **指定部署路径** — 创建时可填写宿主机上的任意目录，之后还能迁移；详见下文
 - **编辑 compose 文件** — 保存前用 `docker compose config` 校验，失败则回滚并保留原文件
-- **编辑 .env** — 每行 `KEY=VALUE`，作为 `--env-file` 传入 compose
+- **编辑 .env** — 每行 `KEY=VALUE`，作为 `--env-file` 传给 compose 做 `${VAR}` 插值
+  （只写进 `.env` 不会自动进入容器，compose 里需要 `environment` 显式引用）
 - **导入镜像** — 拖拽或选择 `docker save` 生成的 `.tar` / `.tar.gz`，服务端执行 `docker load`
 - **启动 / 停止 / 重启 / 移除容器** — 对应 `up -d`、`stop`、`restart`、`down`
 - **拉取 / 构建镜像** — 对应 `docker compose pull` / `build`
@@ -297,6 +298,7 @@ Dockerfile             容器镜像定义（含 docker CLI 与 compose 插件）
 .dockerignore          构建上下文排除项：data/、已部署的应用目录、镜像归档、.env
 docker-compose.yml     Cypher 自身的部署示例（项目名 cypher--console，避免与应用 id 撞名）
 .env.example           compose 用的环境变量模板，复制为 .env 后填写
+.github/workflows/ci.yml  CI：语法检查、compose 校验、离线构建与端到端冒烟
 ```
 
 部署目录本身只包含 `docker-compose.yml`（或 `compose.yml`）与 `.env`，
@@ -319,6 +321,23 @@ Cypher 的元数据全部集中在 `data/apps.json`。升级前若已有旧版�
 | PUT | `/api/apps/:id/images?filename=x.tar` | 上传并 `docker load` 镜像归档 |
 | POST | `/api/apps/:id/actions/:action` | `up` / `down` / `stop` / `restart` / `build` / `pull` |
 | GET | `/api/apps/:id/logs?tail=300` | 查看日志 |
+
+## 持续集成
+
+`.github/workflows/ci.yml` 在 push 到 `main`、发起 PR 或手动触发时运行，
+不需要任何仓库密钥，`permissions` 只要 `contents: read`。
+
+`check` job 做静态检查：对全部受版本控制的 `.js` 跑 `node --check`、
+`docker compose config` 校验示例文件、确认空 `CYPHER_TOKEN` 会被 `${VAR:?}`
+拒绝、断言 `public/` 里没有 `http(s)://` 外链（否则断网部署会白屏）、
+确认 `data/`、`casdoor/`、`smartq/` 与 `.env` 没有被提交。
+
+`build` job 做端到端验证：先 `docker build --network=none --pull=false`
+证明构建过程不联网，再在镜像内检查 `node` / `docker` / `compose` 三件工具，
+启动容器并等健康检查变成 `healthy`，然后跑完整生命周期——建应用、写
+compose 与 `.env`、`up`、断言容器 `running` 且 `.env` 真的注入到了容器、
+看日志、`down`、删除并断言默认部署目录被清理。失败时自动 `docker logs`，
+无论成败最后都会移除容器、测试应用与数据卷。
 
 ## 安全说明
 

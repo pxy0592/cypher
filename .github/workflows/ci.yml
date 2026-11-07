@@ -1,0 +1,212 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  IMAGE: cypher:ci
+  # 仅用于 CI 的临时令牌，不是真实凭据
+  CI_TOKEN: ci-token-not-a-secret
+
+jobs:
+  check:
+    name: 语法与配置检查
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: JavaScript 语法检查
+        run: |
+          set -euo pipefail
+          git ls-files '*.js' | while read -r file; do
+            node --check "$file"
+            echo "ok  $file"
+          done
+
+      - name: compose 文件可解析
+        env:
+          CYPHER_TOKEN: ${{ env.CI_TOKEN }}
+          CYPHER_HOME: /tmp/cypher-data
+        run: docker compose config --quiet
+
+      - name: 未设置令牌时拒绝启动
+        run: |
+          set -euo pipefail
+          if CYPHER_TOKEN= docker compose config --quiet 2>/dev/null; then
+            echo "::error::空 CYPHER_TOKEN 应当让 compose 报错退出"
+            exit 1
+          fi
+          echo "ok  空令牌被拒绝"
+
+      - name: 前端无外部资源引用
+        run: |
+          set -euo pipefail
+          # 只允许内联 data URI，出现任何 http(s) 外链都会让离线部署失效
+          if grep -rnE 'https?://' public/ | grep -v 'data:image'; then
+            echo "::error::public/ 引用了外部资源，断网环境下会加载失败"
+            exit 1
+          fi
+          echo "ok  public/ 无外部资源"
+
+      - name: 运行时数据与密钥未入库
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '^(data/|casdoor/|smartq/|\.env$|\.env\.local$)'; then
+            echo "::error::运行时数据或 .env 被纳入版本控制"
+            exit 1
+          fi
+          echo "ok  运行时数据未纳入版本控制"
+
+  build:
+    name: 构建镜像与端到端冒烟
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 预取基础镜像
+        run: |
+          set -euo pipefail
+          # 与 Dockerfile 的 ARG 默认值保持一致，避免 --network=none 构建时缺层
+          docker pull node:22-alpine
+          docker pull docker:27-cli
+          # 冒烟测试要跑一个真实容器，提前拉取避免影响运行时断言
+          docker pull alpine:latest
+
+      - name: 离线构建
+        run: |
+          set -euo pipefail
+          # --network=none 证明构建过程不需要联网（Dockerfile 里不能有 syntax 指令）
+          docker build --network=none --pull=false -t "$IMAGE" .
+          docker image inspect "$IMAGE" --format '镜像大小 {{.Size}} 字节'
+
+      - name: 镜像内工具链齐全
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh "$IMAGE" -c \
+            'node --version && docker --version && docker compose version'
+
+      - name: 启动容器
+        run: |
+          set -euo pipefail
+          # 数据目录用命名卷：容器内以 root 写入，卷不会在工作区留下 root 所有文件
+          # 宿主机端口交给 Docker 随机分配，避免与 runner 上已有服务抢端口
+          docker run -d --name cypher-ci \
+            -p 127.0.0.1::3000 \
+            -e CYPHER_TOKEN="$CI_TOKEN" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v cypher-ci-data:/data \
+            "$IMAGE"
+          port=$(docker port cypher-ci 3000 | head -n1 | awk -F: '{print $NF}')
+          [ -n "$port" ] || { echo "::error::无法确定映射端口"; docker port cypher-ci; exit 1; }
+          echo "API=http://127.0.0.1:${port}/api" >> "$GITHUB_ENV"
+          echo "ok  已映射到 127.0.0.1:${port}"
+
+      - name: 等待健康检查通过
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' cypher-ci 2>/dev/null || echo missing)
+            case "$status" in
+              healthy) echo "ok  容器健康"; exit 0 ;;
+              unhealthy) break ;;
+            esac
+            sleep 2
+          done
+          docker logs cypher-ci || true
+          echo "::error::容器未在 60 秒内变为 healthy（当前：$status）"
+          exit 1
+
+      - name: 鉴权与 Docker 连通性
+        run: |
+          set -euo pipefail
+          base=${API%/api}
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/system")
+          if [ "$code" != 401 ]; then
+            echo "::error::无令牌请求应返回 401，实际 $code"
+            exit 1
+          fi
+          body=$(curl -fsS -H "x-cypher-token: $CI_TOKEN" "$base/api/system")
+          echo "$body"
+          echo "$body" | jq -e '.daemon == true' >/dev/null \
+            || { echo "::error::容器内无法访问 Docker 守护进程"; exit 1; }
+
+      - name: 应用生命周期
+        run: |
+          set -euo pipefail
+          api=$API
+          auth=(-H "x-cypher-token: $CI_TOKEN" -H 'content-type: application/json')
+          # 响应写文件再交给 jq，避免 compose 输出里的控制字符经 shell 变量变形
+          tmp=$(mktemp -d)
+          dump() { echo "--- $1 ---"; cat "$1"; echo; }
+
+          app=$(curl -fsS "${auth[@]}" -d '{"name":"ci smoke"}' "$api/apps" \
+            | tee "$tmp/create.json" | jq -r '.app.id')
+          echo "应用 id: $app"
+          [ "$app" != "null" ] || { dump "$tmp/create.json"; exit 1; }
+
+          # 不发布端口，避免与 CI 机器上其它服务冲突。
+          # 必须显式 environment 引用 ${TZ}：--env-file 只做插值，不会自动注入容器。
+          curl -fsS "${auth[@]}" -X PUT \
+            -d '{"content":"services:\n  app:\n    image: alpine:latest\n    command: sleep 120\n    environment:\n      TZ: ${TZ}\n"}' \
+            "$api/apps/$app/files/compose" >/dev/null
+
+          curl -fsS "${auth[@]}" -X PUT \
+            -d '{"content":"TZ=Asia/Shanghai\n"}' \
+            "$api/apps/$app/files/env" >/dev/null
+
+          curl -fsS "${auth[@]}" -X POST "$api/apps/$app/actions/up" -o "$tmp/up.json"
+          jq -e '.containers | length > 0' "$tmp/up.json" >/dev/null \
+            || { echo "::error::up 之后没有容器"; dump "$tmp/up.json"; exit 1; }
+          jq -e '.containers[0].state == "running"' "$tmp/up.json" >/dev/null \
+            || { echo "::error::容器未处于 running"; dump "$tmp/up.json"; exit 1; }
+
+          # .env 必须真的注入到容器
+          docker exec "${app}-app-1" printenv TZ | grep -qx 'Asia/Shanghai' \
+            || { echo "::error::.env 未注入容器"; exit 1; }
+
+          curl -fsS "${auth[@]}" "$api/apps/$app/logs?tail=50" -o "$tmp/logs.json"
+          jq -e 'has("logs")' "$tmp/logs.json" >/dev/null \
+            || { echo "::error::日志接口返回异常"; dump "$tmp/logs.json"; exit 1; }
+
+          curl -fsS "${auth[@]}" -X POST "$api/apps/$app/actions/down" -o "$tmp/down.json"
+          jq -e '.containers | length == 0' "$tmp/down.json" >/dev/null \
+            || { echo "::error::down 之后仍有容器"; dump "$tmp/down.json"; exit 1; }
+
+          # 默认部署目录在删除时应连同文件一起移除
+          curl -fsS "${auth[@]}" -X DELETE "$api/apps/$app" -o "$tmp/delete.json"
+          jq -e '.removedFiles == true' "$tmp/delete.json" >/dev/null \
+            || { echo "::error::默认目录未被清理"; dump "$tmp/delete.json"; exit 1; }
+
+          rm -rf "$tmp"
+          echo "ok  应用生命周期与 .env 注入均正常"
+
+      - name: 收集诊断信息
+        if: failure()
+        run: |
+          docker logs cypher-ci 2>&1 | tail -50 || true
+          docker ps -a --format '{{.Names}}\t{{.Status}}' || true
+
+      - name: 清理
+        if: always()
+        run: |
+          docker rm -f cypher-ci >/dev/null 2>&1 || true
+          docker ps -aq --filter 'label=com.docker.compose.project=ci-smoke' | xargs -r docker rm -f
+          docker network rm ci-smoke_default >/dev/null 2>&1 || true
+          docker volume rm cypher-ci-data >/dev/null 2>&1 || true
