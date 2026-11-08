@@ -6,6 +6,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
+import zlib from 'node:zlib';
 
 import { Store, StoreError, isValidId } from './lib/store.js';
 import {
@@ -79,12 +80,10 @@ function requireToken(req) {
   if (!ACCESS_TOKEN) return;
   const header = req.headers.authorization || '';
   const bearer = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const cookie = (req.headers.cookie || '')
-    .split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith('cypher_token='));
-  const fromCookie = cookie ? decodeURIComponent(cookie.split('=').slice(1).join('=')) : '';
-  const provided = bearer || fromCookie || String(req.headers['x-cypher-token'] || '');
+  // Headers only. A cookie is attached by the browser automatically on
+  // cross-site requests, which would turn every mutating route into a CSRF
+  // target the moment a cookie exists; nothing sets one, so accept none.
+  const provided = bearer || String(req.headers['x-cypher-token'] || '');
 
   const a = Buffer.from(provided);
   const b = Buffer.from(ACCESS_TOKEN);
@@ -103,7 +102,31 @@ const CONTENT_TYPES = {
   '.woff2': 'font/woff2',
 };
 
-async function serveStatic(res, urlPath) {
+/**
+ * Sent on every response. The UI builds tables from innerHTML but never runs
+ * inline script, so script-src stays strict; inline style attributes appear in
+ * the generated markup, hence 'unsafe-inline' for style-src only.
+ */
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy': [
+    "default-src 'self'",
+    "img-src 'self' data:",
+    "style-src 'self' 'unsafe-inline'",
+    "script-src 'self'",
+    "connect-src 'self'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join('; '),
+};
+
+/** Extensions worth compressing; binaries are already compressed. */
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.svg']);
+
+async function serveStatic(req, res, urlPath) {
   const relative = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
   const target = path.resolve(PUBLIC_DIR, relative);
   if (!target.startsWith(path.resolve(PUBLIC_DIR) + path.sep)) {
@@ -121,12 +144,49 @@ async function serveStatic(res, urlPath) {
     sendJson(res, 404, { error: 'Not found' });
     return;
   }
-  const type = CONTENT_TYPES[path.extname(target)] || 'application/octet-stream';
-  res.writeHead(200, {
+  const ext = path.extname(target);
+  const type = CONTENT_TYPES[ext] || 'application/octet-stream';
+  // No filename is content-hashed, so a stale asset would be served forever if
+  // we cached hard. An ETag turns each revalidation into a 304 instead of a
+  // full body.
+  const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+  const headers = {
     'content-type': type,
-    'content-length': stat.size,
     'cache-control': 'no-cache',
-  });
+    etag,
+    'last-modified': stat.mtime.toUTCString(),
+  };
+
+  const inm = req.headers['if-none-match'];
+  if (inm && inm.split(',').some((tag) => tag.trim() === etag)) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+
+  const gzip = COMPRESSIBLE.has(ext)
+    && stat.size > 1024
+    && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+
+  if (gzip) {
+    headers['content-encoding'] = 'gzip';
+    headers.vary = 'Accept-Encoding';
+    res.writeHead(200, headers);
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+    await pipeline(fs.createReadStream(target), zlib.createGzip(), res)
+      .catch(() => res.destroy());
+    return;
+  }
+
+  headers['content-length'] = stat.size;
+  res.writeHead(200, headers);
+  if (req.method === 'HEAD') {
+    res.end();
+    return;
+  }
   fs.createReadStream(target).pipe(res);
 }
 
@@ -297,7 +357,13 @@ async function handleApi(req, res, url) {
 
   // /api/apps/:id/files/:name
   if (parts[3] === 'files' && parts.length === 5) {
-    const name = decodeURIComponent(parts[4]);
+    let name;
+    try {
+      name = decodeURIComponent(parts[4]);
+    } catch {
+      // A lone `%` is a client error, not an internal failure.
+      throw new HttpError('文件类型无法解析', 400);
+    }
     if (name !== 'compose' && name !== 'env') throw new HttpError('未知文件', 404);
     const app = await loadApp(id);
     const fileName = name === 'compose'
@@ -435,6 +501,8 @@ async function handleApi(req, res, url) {
 /* ------------------------------------------------------------------ server */
 
 const server = http.createServer(async (req, res) => {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+
   // Never build the base from the Host header: a Host carrying a URL-illegal
   // character makes `new URL` throw ERR_INVALID_URL, and a throw here happens
   // before the try block below, so it surfaces as an unhandled rejection and
@@ -464,7 +532,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 405, { error: 'Method not allowed' });
       return;
     }
-    await serveStatic(res, url.pathname);
+    await serveStatic(req, res, url.pathname);
   } catch (err) {
     if (res.headersSent) {
       res.destroy();
@@ -479,11 +547,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     console.error('[cypher]', err);
-    sendJson(res, 500, { error: err.message || '服务器内部错误' });
+    // Unexpected failures can carry absolute host paths; keep them in the log.
+    sendJson(res, 500, { error: '服务器内部错误' });
   }
 });
 
-server.headersTimeout = 0;
+// Only the whole-request deadline is lifted: image archives are legitimately
+// large and slow to stream. headersTimeout keeps its default so a client that
+// trickles headers cannot hold a connection open indefinitely.
 server.requestTimeout = 0;
 
 await store.init();
