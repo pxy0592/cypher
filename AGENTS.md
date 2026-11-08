@@ -4,7 +4,10 @@
 
 Cypher manages Docker Compose deployments using Node.js 20+ ES modules, without dependencies or a build step.
 
-- `server.js`: HTTP server, authentication, API, and static serving.
+- `server.js`: HTTP server, authentication, API, and static serving. Everything
+  runs through `createServer(options)`, which takes the store, the Docker
+  runner, the token and the static root as options; the entry point at the
+  bottom only listens when the file is executed directly.
 - `lib/docker.js`: subprocess execution and Compose helpers.
 - `lib/store.js`: application registry, deployment paths, and file persistence.
 - `public/`: HTML, browser JavaScript, and CSS assets.
@@ -41,14 +44,20 @@ Specification directories are absent; establish acceptance criteria before imple
 
 ## Testing Guidelines
 
-`npm test` runs `node --test tests/*.test.js`. The suite currently lives in
-`tests/store.test.js` and covers the registry, deployment-path validation,
-migration and `owned` semantics. Add new cases as `tests/*.test.js` using
-`node:test`; keep filesystem work inside temporary directories and do not call
-Docker, so the suite runs without a daemon.
+`npm test` runs `node --test tests/*.test.js`. There are two suites:
+`tests/store.test.js` covers the registry, deployment-path validation, migration
+and `owned` semantics; `tests/server.test.js` boots `createServer()` on an
+ephemeral port and drives the real routes — auth, static delivery, the app
+lifecycle, compose validation and error mapping — against a temporary data
+directory and a stub `exec`. Add new cases as `tests/*.test.js` using
+`node:test`; keep filesystem work inside temporary directories and never call
+Docker.
+
+Prefer booting `createServer()` over spawning `server.js` in a child process:
+that factory exists so routes can be exercised in-process.
 
 - `npm test` — the whole suite.
-- `node tests/store.test.js` — run one file in-process.
+- `node tests/server.test.js` — run one file in-process.
 - `node --test --experimental-test-coverage` — with coverage.
 
 `node --test` spawns each test file as a child process with piped stdio, which

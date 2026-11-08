@@ -26,6 +26,10 @@ node --test --experimental-test-coverage    # 附带覆盖率
 用 Node 内置的 `node:test`，不需要安装任何依赖；用例只碰临时目录，
 不调用 Docker，所以无需守护进程即可运行。
 
+两个套件：`tests/store.test.js` 覆盖注册表、部署路径校验、迁移与 `owned` 语义；
+`tests/server.test.js` 用 `createServer()` 在临时目录里起一个真实 HTTP 服务
+（端口随机、Docker 调用用桩替换），覆盖鉴权、静态资源、应用生命周期与错误映射。
+
 ## 容器化运行
 
 **推荐用仓库里的 `docker-compose.yml`**，它已经处理了同路径挂载、令牌校验和项目名冲突：
@@ -340,13 +344,13 @@ CYPHER_TOKEN='换成一个长随机串' HOST=0.0.0.0 node server.js
 ## 目录结构
 
 ```
-server.js              HTTP 服务与 REST API
+server.js              HTTP 服务与 REST API（导出 createServer，入口在文件末尾）
 lib/docker.js          进程调用、compose 参数拼装、ps 输出解析
 lib/store.js           应用注册表、部署路径校验与迁移、compose/env 读写
 public/index.html      页面骨架
 public/app.js          前端逻辑（原生 ES 模块）
 public/styles.css      样式
-tests/                 node:test 用例（注册表与部署目录，不依赖 Docker）
+tests/                 node:test 用例（注册表、部署目录与 HTTP 路由，不依赖 Docker）
 data/apps.json         应用注册表：id、名称、描述、部署路径
 data/uploads/          镜像上传临时目录（上传完成后即删）
 data/apps/<id>/        未指定部署路径时的默认承载目录
