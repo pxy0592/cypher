@@ -188,6 +188,22 @@ jobs:
           echo "$body" | jq -e '.daemon == true' >/dev/null \
             || { echo "::error::容器内无法访问 Docker 守护进程"; exit 1; }
 
+      - name: 静态资源缓存与压缩
+        run: |
+          set -euo pipefail
+          base=${API%/api}
+          headers=$(curl -sS -D - -o /dev/null -H 'Accept-Encoding: gzip' "$base/app.js")
+          echo "$headers"
+          echo "$headers" | grep -qi '^content-encoding: gzip' \
+            || { echo "::error::app.js 未按 gzip 压缩"; exit 1; }
+          echo "$headers" | grep -qi '^x-content-type-options: nosniff' \
+            || { echo "::error::缺少安全响应头"; exit 1; }
+          etag=$(echo "$headers" | grep -i '^etag:' | head -n1 | tr -d '\r' | sed 's/^[Ee][Tt]ag: *//')
+          [ -n "$etag" ] || { echo "::error::缺少 ETag"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "If-None-Match: $etag" "$base/app.js")
+          [ "$code" = "304" ] || { echo "::error::带 If-None-Match 应返回 304，实际 $code"; exit 1; }
+          echo "ok  gzip、ETag/304 与安全响应头均生效"
+
       - name: 应用生命周期
         run: |
           set -euo pipefail

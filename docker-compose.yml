@@ -28,6 +28,11 @@ services:
     restart: unless-stopped
     init: true
 
+    # Cypher 本身很轻：真正吃资源的构建与拉取由宿主机守护进程执行，不受这里限制。
+    # 上限只防止它自己失控（例如日志缓冲或并发上传）拖垮宿主机。
+    mem_limit: ${CYPHER_MEM_LIMIT:-1g}
+    cpus: ${CYPHER_CPUS:-2}
+
     ports:
       # 只在内网使用时可以改成 127.0.0.1 并配合反向代理
       - "${CYPHER_BIND:-0.0.0.0}:${CYPHER_PORT:-3000}:3000"

@@ -192,6 +192,41 @@ docker build --network=none -t cypher:1.0.0 .
 docker inspect --format '{{.State.Health.Status}}' cypher
 ```
 
+### 资源上限
+
+`docker-compose.yml` 给容器设了 `mem_limit` 与 `cpus`（默认 `1g` / `2`），只约束 Cypher 自身。
+真正吃资源的 `docker compose build` 与 `pull` 由宿主机守护进程执行，不受这两个值影响，
+所以卡得紧一点也不会让构建失败。
+
+```bash
+CYPHER_MEM_LIMIT=512m CYPHER_CPUS=1 docker compose up -d
+```
+
+### 备份与恢复
+
+需要备份的只有数据目录里的一处：
+
+| 内容 | 位置 | 说明 |
+| --- | --- | --- |
+| 应用注册表 | `<CYPHER_HOME>/apps.json` | 丢了等于所有应用从列表里消失 |
+| 上传临时目录 | `<CYPHER_HOME>/uploads/` | 仅在 `docker load` 期间存在，可跳过 |
+
+各应用自己的 compose 文件与 `.env` 在它们的**部署目录**里，不在数据目录内（除非用的是默认路径
+`<CYPHER_HOME>/apps/<id>`）。备份前看一眼 `apps.json` 里的 `deployPath`，把自定义目录一并收走。
+
+注册表采用「先写临时文件再 rename」落盘，进程崩溃或并发写入都不会留下半截 JSON，
+因此直接 `cp apps.json` 拿到的也是一份完整副本。
+
+```bash
+# 备份（假设 CYPHER_HOME=/srv/cypher）
+tar czf cypher-backup.tgz -C /srv cypher
+
+# 恢复：先停容器，解回数据目录，再启动
+docker compose down
+tar xzf cypher-backup.tgz -C /srv
+docker compose up -d
+```
+
 ## 配置
 
 通过环境变量调整：
