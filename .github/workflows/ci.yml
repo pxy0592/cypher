@@ -42,6 +42,44 @@ jobs:
       - name: 单元测试
         run: npm test
 
+      - name: 畸形 Host 头不得打崩服务
+        run: |
+          set -euo pipefail
+          port=$((3000 + RANDOM % 2000))
+          data=$(mktemp -d)
+          # 直接跑源码，这一层不需要 Docker 守护进程
+          CYPHER_TOKEN="$CI_TOKEN" CYPHER_DATA_DIR="$data" PORT="$port" HOST=127.0.0.1 \
+            node server.js >"$data/server.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; rm -rf "$data"' EXIT
+
+          for _ in $(seq 1 50); do
+            curl -sf -o /dev/null "http://127.0.0.1:$port/" && break
+            kill -0 "$pid" 2>/dev/null \
+              || { echo "::error::服务在就绪前退出"; cat "$data/server.log"; exit 1; }
+            sleep 0.2
+          done
+
+          # Host 头带 URL 非法字符。修复前 new URL(...) 在 try 之外抛
+          # ERR_INVALID_URL，未捕获的 rejection 直接结束进程（curl 拿到 000）。
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'Host: a<b' "http://127.0.0.1:$port/api/system" || true)
+
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "::error::畸形 Host 头打崩了服务进程（curl 得到 $code）"
+            cat "$data/server.log"
+            exit 1
+          fi
+          # 400（拦下）或 401（解析通过后进入鉴权）都说明进程活着、请求被正常处理
+          case "$code" in
+            4??) ;;
+            *) echo "::error::畸形 Host 头应得到 4xx 响应，实际 $code"; exit 1 ;;
+          esac
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/")
+          [ "$code" = "200" ] || { echo "::error::服务不再可用，首页返回 $code"; exit 1; }
+          echo "ok  畸形 Host 头被拒绝，服务存活且仍能正常响应"
+
       - name: compose 文件可解析
         env:
           CYPHER_TOKEN: ${{ env.CI_TOKEN }}

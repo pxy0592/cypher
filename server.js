@@ -435,7 +435,19 @@ async function handleApi(req, res, url) {
 /* ------------------------------------------------------------------ server */
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  // Never build the base from the Host header: a Host carrying a URL-illegal
+  // character makes `new URL` throw ERR_INVALID_URL, and a throw here happens
+  // before the try block below, so it surfaces as an unhandled rejection and
+  // kills the process. Any client able to reach the port could do that without
+  // a token. Only pathname and searchParams are ever read, so a fixed base is
+  // enough.
+  let url;
+  try {
+    url = new URL(req.url, 'http://localhost');
+  } catch {
+    sendJson(res, 400, { error: '请求路径无法解析' });
+    return;
+  }
 
   try {
     if (url.pathname.startsWith('/api/')) {
