@@ -9,7 +9,9 @@ Cypher manages Docker Compose deployments using Node.js 20+ ES modules, without 
 - `lib/store.js`: application registry, deployment paths, and file persistence.
 - `public/`: HTML, browser JavaScript, and CSS assets.
 - `data/`: runtime registry, uploads, and default deployment directories.
-- `casdoor/` and `smartq/`: local deployment configuration.
+- `casdoor/` and `smartq/`: local deployment configuration. Both are gitignored,
+  so a fresh checkout does not contain them; do not create them just to match
+  this list.
 
 ## Build, Test, and Development Commands
 
@@ -19,6 +21,11 @@ Cypher manages Docker Compose deployments using Node.js 20+ ES modules, without 
 - `cp .env.example .env`: prepare Compose configuration; set `CYPHER_TOKEN` before running `docker compose up -d --build`.
 
 Requires Docker Engine, Compose, and daemon access. Direct Node startup does not load `.env`.
+
+CI keeps three behaviours pinned; a change that breaks one of them fails the run
+rather than degrading silently: a malformed `Host` header must not crash the
+server, static assets must come back gzip-encoded with a reusable `ETag`, and
+`public/` must not reference external origins.
 
 ## Coding Style & Naming Conventions
 
@@ -54,10 +61,22 @@ and review approval.
 
 ## Commit & Pull Request Guidelines
 
-Git history is unavailable in this checkout. Use concise, imperative commits, optionally prefixed `feat:`, `fix:`, or `docs:`. PRs should link specifications/issues, explain behavior changes, include verification evidence, and provide screenshots for UI changes.
+Git history is available; read it before changing behaviour. Use concise,
+imperative commits, optionally prefixed `feat:`, `fix:`, or `docs:`. PRs should
+link specifications/issues, explain behavior changes, include verification
+evidence, and provide screenshots for UI changes.
 
 When `.codegraph/` exists, use CodeGraph before searching or reading code. Do not create an index automatically.
 
 ## Security & Configuration
 
 Exclude secrets, runtime data, and image archives from commits. Set `CYPHER_TOKEN` before network exposure. Preserve identical host/container data paths and Compose project name `cypher--console`.
+
+The token travels in request headers only — `Authorization: Bearer …` or
+`x-cypher-token`. Never accept it from a cookie: browsers attach cookies to
+cross-site requests, so a cookie-based token turns every mutating route into a
+CSRF target. The web UI keeps the token in `localStorage` and sends the header.
+
+Every response carries a CSP, so `public/` must not gain inline `<script>`,
+`eval`, or references to external origins. Inline `style` attributes are the one
+allowed exception.
