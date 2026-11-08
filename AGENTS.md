@@ -34,7 +34,23 @@ Specification directories are absent; establish acceptance criteria before imple
 
 ## Testing Guidelines
 
-No test suite or `npm test` script exists. Add `tests/*.test.js` using `node:test`; run `node --test --experimental-test-coverage`. Cover every acceptance criterion and reach at least 90% unit coverage per implemented unit. Isolate filesystem tests and stub Docker processes. Completion requires passing tests, specification alignment, and review approval.
+`npm test` runs `node --test tests/*.test.js`. The suite currently lives in
+`tests/store.test.js` and covers the registry, deployment-path validation,
+migration and `owned` semantics. Add new cases as `tests/*.test.js` using
+`node:test`; keep filesystem work inside temporary directories and do not call
+Docker, so the suite runs without a daemon.
+
+- `npm test` — the whole suite.
+- `node tests/store.test.js` — run one file in-process.
+- `node --test --experimental-test-coverage` — with coverage.
+
+`node --test` spawns each test file as a child process with piped stdio, which
+fails with `spawn EPERM` inside sandboxes that block piped child output. Running
+the file directly (as above) avoids that and is the fallback there.
+
+Cover every acceptance criterion and reach at least 90% unit coverage per
+implemented unit. Completion requires passing tests, specification alignment,
+and review approval.
 
 ## Commit & Pull Request Guidelines
 
